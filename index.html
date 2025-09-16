@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>هيكل تنظيمي - منشئ من ملف Excel</title>
+  <style>
+    :root{font-family: 'Segoe UI', Tahoma, Arial, sans-serif}
+    body{direction: rtl; text-align: right; padding:20px; background:#f7f9fc}
+    h1{font-size:1.4rem; margin-bottom:10px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input[type=file]{padding:6px}
+    .search{padding:6px 10px;border-radius:6px;border:1px solid #ccc;width:220px}
+    #chart{margin-top:20px}
+    ul.org{list-style:none;padding-left:0}
+    ul.org ul{margin-right:18px;border-right:1px dashed #ddd;padding-right:12px;margin-top:8px}
+    li.node{margin:6px 0;padding:6px 8px;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.04);cursor:default}
+    .node .meta{font-size:0.85rem;color:#555}
+    .node .extra{font-size:0.8rem;color:#444;margin-top:6px;line-height:1.4}
+    .toggle{margin-left:8px;cursor:pointer;font-weight:bold}
+    .hidden{display:none}
+    .highlight{background:linear-gradient(90deg,#fff6c2,#fff);border:1px solid #ffd966}
+    .info{margin-top:10px;color:#333;font-size:0.95rem}
+    .footer{margin-top:18px;color:#666;font-size:0.85rem}
+    button{padding:8px 10px;border-radius:6px;border:1px solid #2b6cb0;background:#3182ce;color:white;cursor:pointer}
+    .small{font-size:0.85rem;padding:6px 8px}
+    .detail-line{margin-bottom:2px}
+  </style>
+</head>
+<body>
+  <h1>مولد هيكل تنظيمي من ملف Excel</h1>
+  <div class="controls">
+    <label for="file">ارفع ملف Excel (.xlsx):</label>
+    <input id="file" type="file" accept=".xlsx,.xls" />
+    <button id="build" class="small">إنشاء الهيكل</button>
+    <input id="search" class="search" placeholder="🔍 بحث ذكي (اسم، مسمى، قسم، موقع...)" />
+    <button id="expandAll" class="small">توسيع الكل</button>
+    <button id="collapseAll" class="small">طي الكل</button>
+  </div>
+
+  <div class="info">ملاحظة: يجب أن يحتوي الورقة (sheet) على الأعمدة التالية: <strong>الرقم الوظيفي, الاسم كاملاً باللغة العربية, المسمى الوظيفي, المدير المباشر, الجنسية, الجنس, القسم, الموقع, تاريخ الانضمام, سنوات خبرة العمل, الراتب الأساسي</strong>. الأعمدة الأخرى مثل البدلات والراتب الكامل ستعرض أيضاً إن وجدت.</div>
+
+  <div id="chart"></div>
+  <div class="footer">ملف مُعد تلقائياً — افتح الملف، ارفع الإكسيل، ثم اضغط "إنشاء الهيكل". يمكنك البحث أو طي/توسيع العناصر.</div>
+
+  <!-- SheetJS for reading Excel in browser -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <script>
+    function sanitizeName(s){ if(s===undefined || s===null) return ''; return String(s).trim(); }
+
+    function buildTree(rows){
+      const byName = new Map();
+      const nodes = [];
+      rows.forEach(r=>{
+        const empId = sanitizeName(r['الرقم الوظيفي']);
+        const name = sanitizeName(r['الاسم كاملاً باللغة العربية'] || r['الاسم']);
+        const title = sanitizeName(r['المسمى الوظيفي'] || '');
+        const mgr = sanitizeName(r['المدير المباشر'] || '');
+        const nationality = sanitizeName(r['الجنسية']);
+        const gender = sanitizeName(r['الجنس']);
+        const dept = sanitizeName(r['القسم']);
+        const site = sanitizeName(r['الموقع']);
+        const joinDate = sanitizeName(r['تاريخ الانضمام']);
+        const exp = sanitizeName(r['سنوات خبرة العمل']);
+        const baseSalary = sanitizeName(r['الراتب الأساسي']);
+        const totalSalary = sanitizeName(r['كامل الراتب']);
+
+        if(!name) return;
+        const node = {id: empId||name, name, title, manager: mgr, nationality, gender, dept, site, joinDate, exp, baseSalary, totalSalary, children: []};
+        nodes.push(node);
+        byName.set(name, node);
+      });
+
+      const roots = [];
+      nodes.forEach(n=>{
+        const mgr = n.manager;
+        if(!mgr || /^-+$/.test(mgr) || /^ـ+$/.test(mgr) || mgr.toLowerCase().includes('null') || mgr.includes('(مسؤول مفقود)')){
+          roots.push(n);
+        } else {
+          const parent = byName.get(mgr);
+          if(parent){ parent.children.push(n); }
+          else {
+            const placeholderId = 'mgr::'+mgr;
+            if(!byName.has(mgr)){
+              const ph = {id: placeholderId, name: mgr, title: '(مسؤول مفقود)', children: []};
+              byName.set(mgr, ph);
+              roots.push(ph);
+            }
+            byName.get(mgr).children.push(n);
+          }
+        }
+      });
+      return roots;
+    }
+
+    function createNodeElement(node){
+      const li = document.createElement('li');
+      li.className = 'node';
+      const hasChildren = node.children && node.children.length>0;
+
+      const titleLine = document.createElement('div');
+      titleLine.style.display='flex';
+      titleLine.style.alignItems='center';
+
+      const toggle = document.createElement('span');
+      toggle.className='toggle';
+      toggle.textContent = hasChildren ? '▾' : '';
+
+      let ul = null;
+      if(hasChildren){
+        ul = document.createElement('ul');
+        ul.className='org';
+        node.children.sort((a,b)=> a.name.localeCompare(b.name,'ar')).forEach(child=>{
+          ul.appendChild(createNodeElement(child));
+        });
+        toggle.onclick = (e)=>{
+          e.stopPropagation();
+          if(!ul) return;
+          ul.classList.toggle('hidden');
+          toggle.textContent = ul.classList.contains('hidden') ? '▸' : '▾';
+        };
+      }
+
+      const nameSpan = document.createElement('span');
+      nameSpan.innerHTML = `<strong>${escapeHtml(node.name)}</strong>`;
+      nameSpan.style.marginRight='8px';
+      const titleSpan = document.createElement('span');
+      titleSpan.className='meta';
+      titleSpan.textContent = node.title ? ' - '+node.title : '';
+
+      titleLine.appendChild(toggle);
+      titleLine.appendChild(nameSpan);
+      titleLine.appendChild(titleSpan);
+      li.appendChild(titleLine);
+
+      const extra = document.createElement('div');
+      extra.className='extra';
+      extra.innerHTML = `
+        <div class="detail-line">👔 المدير المباشر: ${escapeHtml(node.manager || '')}</div>
+        <div class="detail-line">🌍 الجنسية: ${escapeHtml(node.nationality || '')}</div>
+        <div class="detail-line">👤 الجنس: ${escapeHtml(node.gender || '')}</div>
+        <div class="detail-line">🏢 القسم: ${escapeHtml(node.dept || '')}</div>
+        <div class="detail-line">📍 الموقع: ${escapeHtml(node.site || '')}</div>
+        <div class="detail-line">📅 تاريخ الانضمام: ${escapeHtml(node.joinDate || '')}</div>
+        <div class="detail-line">⏳ سنوات الخبرة: ${escapeHtml(node.exp || '')}</div>
+        <div class="detail-line">💰 الراتب الأساسي: ${escapeHtml(node.baseSalary || '')}</div>
+        ${node.totalSalary ? `<div class="detail-line">💵 كامل الراتب: ${escapeHtml(node.totalSalary)}</div>` : ''}
+      `;
+      li.appendChild(extra);
+
+      if(ul){ li.appendChild(ul); }
+      return li;
+    }
+
+    function renderTree(roots, container){
+      container.innerHTML='';
+      const ul = document.createElement('ul');
+      ul.className='org';
+      roots.sort((a,b)=> a.name.localeCompare(b.name,'ar')).forEach(r=>{
+        ul.appendChild(createNodeElement(r));
+      });
+      container.appendChild(ul);
+    }
+
+    function escapeHtml(text){ return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    let parsedRows = null;
+    document.getElementById('file').addEventListener('change', (evt)=>{
+      const f = evt.target.files[0];
+      if(!f) return;
+      const reader = new FileReader();
+      reader.onload = function(e){
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, {type:'array'});
+        const firstSheetName = workbook.SheetNames[0];
+        const ws = workbook.Sheets[firstSheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+        parsedRows = rows;
+        document.getElementById('chart').innerHTML = `<div style="padding:10px;background:#fff;border-radius:8px;">تم قراءة ${rows.length} صفوف من الورقة: <strong>${firstSheetName}</strong>. اضغط "إنشاء الهيكل" لعرض الشجرة.</div>`;
+      };
+      reader.readAsArrayBuffer(f);
+    });
+
+    document.getElementById('build').addEventListener('click', ()=>{
+      const container = document.getElementById('chart');
+      if(!parsedRows){ container.innerHTML = '<div style="color:#b00">لم يتم رفع ملف بعد.</div>'; return; }
+      const normalized = parsedRows.map(r=>({
+        'الرقم الوظيفي': r['الرقم الوظيفي'] || r['ID'] || '',
+        'الاسم كاملاً باللغة العربية': r['الاسم كاملاً باللغة العربية'] || r['Name'] || '',
+        'المسمى الوظيفي': r['المسمى الوظيفي'] || r['Job Title'] || '',
+        'المدير المباشر': r['المدير المباشر'] || r['Manager'] || '',
+        'الجنسية': r['الجنسية'] || '',
+        'الجنس': r['الجنس'] || '',
+        'القسم': r['القسم'] || '',
+        'الموقع': r['الموقع'] || '',
+        'تاريخ الانضمام': r['تاريخ الانضمام'] || '',
+        'سنوات خبرة العمل': r['سنوات خبرة العمل'] || '',
+        'الراتب الأساسي': r['الراتب الأساسي'] || '',
+        'كامل الراتب': r['كامل الراتب'] || ''
+      }));
+      const roots = buildTree(normalized);
+      renderTree(roots, container);
+    });
+
+    document.getElementById('search').addEventListener('input', (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      if(!q){
+        document.querySelectorAll('.highlight').forEach(el=>el.classList.remove('highlight'));
+        return;
+      }
+      const nodes = Array.from(document.querySelectorAll('.node'));
+      nodes.forEach(n=>{
+        n.classList.remove('highlight');
+        const text = (n.innerText || n.textContent || '').toLowerCase();
+        if(text.includes(q)){
+          n.classList.add('highlight');
+          let p = n.parentElement;
+          while(p && p !== document.body){
+            if(p.tagName.toLowerCase()==='ul') p.classList.remove('hidden');
+            p = p.parentElement;
+          }
+        }
+      });
+    });
+
+    document.getElementById('expandAll').addEventListener('click', ()=>{
+      document.querySelectorAll('ul.org').forEach(u=>u.classList.remove('hidden'));
+      document.querySelectorAll('.toggle').forEach(t=>{ if(t.textContent) t.textContent='▾' });
+    });
+    document.getElementById('collapseAll').addEventListener('click', ()=>{
+      document.querySelectorAll('ul.org').forEach((u,i)=>{ if(i>0) u.classList.add('hidden') });
+      document.querySelectorAll('.toggle').forEach(t=>{ if(t.textContent) t.textContent='▸' });
+    });
+  </script>
+</body>
+</html>
